@@ -158,12 +158,76 @@ func TestDownloadAndExtractCopiesRARIntoDestination(t *testing.T) {
 	defer server.Close()
 
 	destination := t.TempDir()
-	if err := downloadAndExtract(context.Background(), server.Client(), server.URL, destination); err != nil {
+	var progressEvents []installationProgress
+	if err := downloadAndExtractWithProgress(
+		context.Background(),
+		server.Client(),
+		server.URL,
+		destination,
+		func(progress installationProgress) {
+			progressEvents = append(progressEvents, progress)
+		},
+	); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(destination, "link.txt")); err != nil {
 		t.Fatal(err)
 	}
+
+	foundDownload := false
+	foundExtraction := false
+	foundCopy := false
+	for _, progress := range progressEvents {
+		switch progress.Stage {
+		case stageDownloading:
+			foundDownload = foundDownload || progress.Downloaded == int64(len(archive))
+		case stageExtracting:
+			foundExtraction = true
+		case stageCopying:
+			foundCopy = true
+		}
+	}
+	if !foundDownload || !foundExtraction || !foundCopy {
+		t.Fatalf("missing progress stages: %#v", progressEvents)
+	}
+}
+
+func TestDownloadProgressIsRendered(t *testing.T) {
+	model := newAppModel()
+	model.screen = installScreen
+	model.width = 80
+	model.selectedPath = `C:\Steam\Madden NFL 27`
+	model.progress = installationProgress{
+		Stage:      stageDownloading,
+		Downloaded: 50,
+		TotalBytes: 100,
+	}
+
+	view := model.View()
+	if !strings.Contains(view, "50%") || !strings.Contains(view, "50 B / 100 B") {
+		t.Fatalf("download progress was not rendered: %q", view)
+	}
+}
+
+func TestInstallationProgressMessageUpdatesModel(t *testing.T) {
+	model := newAppModel()
+	model.screen = installScreen
+	model.installEvents = make(chan tea.Msg)
+	progress := installationProgress{
+		Stage:          stageCopying,
+		CompletedFiles: 2,
+		TotalFiles:     3,
+	}
+
+	updated, command := model.Update(installationProgressMsg{progress: progress})
+	model = updated.(appModel)
+	if model.progress != progress {
+		t.Fatalf("progress = %#v, want %#v", model.progress, progress)
+	}
+	if command == nil {
+		t.Fatal("expected command waiting for the next progress event")
+	}
+	close(model.installEvents)
 }
 
 func TestInstallationFinishedChangesScreen(t *testing.T) {
