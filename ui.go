@@ -329,7 +329,12 @@ func (model appModel) installView() string {
 	case stageDownloading:
 		status = model.downloadProgressView()
 	case stageExtracting:
-		status = fmt.Sprintf("Extraindo o arquivo RAR... %d arquivo(s)", model.progress.CompletedFiles)
+		status = "Extraindo o arquivo RAR..."
+		if model.progress.CompletedFiles == 1 {
+			status += " 1 arquivo extraído"
+		} else if model.progress.CompletedFiles > 1 {
+			status += fmt.Sprintf(" %d arquivos extraídos", model.progress.CompletedFiles)
+		}
 	case stageCopying:
 		status = fmt.Sprintf(
 			"Copiando para a pasta do Madden... %d/%d arquivo(s)",
