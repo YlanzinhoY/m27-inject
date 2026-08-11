@@ -147,22 +147,22 @@ func TestArchiveDestinationAcceptsNestedFile(t *testing.T) {
 
 func TestExtractRARCopiesFilesIntoDestination(t *testing.T) {
 	destination := t.TempDir()
-	archivePath := filepath.Join("testdata", "basic.rar")
+	archivePath := filepath.Join("testdata", "install.rar")
 
 	if err := extractRAR(archivePath, destination); err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Stat(filepath.Join(destination, "link.txt"))
+	info, err := os.Stat(filepath.Join(destination, "version.dll"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if info.IsDir() {
-		t.Fatal("extracted link.txt is a directory")
+		t.Fatal("extracted version.dll is a directory")
 	}
 }
 
 func TestDownloadAndExtractCopiesRARIntoDestination(t *testing.T) {
-	archive, err := os.ReadFile(filepath.Join("testdata", "basic.rar"))
+	archive, err := os.ReadFile(filepath.Join("testdata", "install.rar"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestDownloadAndExtractCopiesRARIntoDestination(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(destination, "link.txt")); err != nil {
+	if _, err := os.Stat(filepath.Join(destination, "version.dll")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -211,7 +211,7 @@ func TestDownloadAndExtractCopiesRARIntoDestination(t *testing.T) {
 }
 
 func TestDownloadAndExtractRejectsInvalidSHA256(t *testing.T) {
-	archive, err := os.ReadFile(filepath.Join("testdata", "basic.rar"))
+	archive, err := os.ReadFile(filepath.Join("testdata", "install.rar"))
 	if err != nil {
 		t.Fatal(err)
 	}
