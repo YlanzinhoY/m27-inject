@@ -9,10 +9,15 @@ import (
 )
 
 func main() {
+	disableExplorerMousetrap()
 	if err := newRootCommand().Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Erro: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func disableExplorerMousetrap() {
+	cobra.MousetrapHelpText = ""
 }
 
 func newRootCommand() *cobra.Command {
