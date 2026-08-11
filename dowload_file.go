@@ -20,6 +20,8 @@ import (
 const (
 	downloadLink          = "https://pixeldrain.com/api/file/AXCPM2gM"
 	expectedArchiveSHA256 = "0d3c93b5ce9f410ed8220fdb91081c55eaf752316d32403f23042cf02bb8aa67"
+	preloaderDirectory    = "preloader_l.dll original"
+	preloaderFileName     = "preloader_l.dll"
 )
 
 type installationStage int
@@ -275,6 +277,9 @@ func extractRARWithDecoder(archivePath string, gamePath string, report progressR
 	if fileCount == 0 {
 		return fmt.Errorf("o arquivo RAR não contém arquivos")
 	}
+	if err := movePreloaderToRoot(stagingPath); err != nil {
+		return fmt.Errorf("não foi possível preparar %q: %w", preloaderFileName, err)
+	}
 	reportProgress(report, installationProgress{
 		Stage:      stageCopying,
 		TotalFiles: fileCount,
@@ -324,6 +329,9 @@ func extractRARWithNativeTar(
 	if err != nil {
 		return fmt.Errorf("não foi possível extrair o RAR: %w: %s", err, strings.TrimSpace(string(extractOutput)))
 	}
+	if err := movePreloaderToRoot(stagingPath); err != nil {
+		return fmt.Errorf("não foi possível preparar %q: %w", preloaderFileName, err)
+	}
 
 	fileCount := 0
 	err = filepath.WalkDir(stagingPath, func(_ string, entry fs.DirEntry, walkErr error) error {
@@ -356,6 +364,34 @@ func extractRARWithNativeTar(
 
 	reportProgress(report, installationProgress{Stage: stageCopying, TotalFiles: fileCount})
 	return copyExtractedFilesWithProgress(stagingPath, gamePath, fileCount, report)
+}
+
+func movePreloaderToRoot(stagingPath string) error {
+	sourceDirectory := filepath.Join(stagingPath, preloaderDirectory)
+	sourcePath := filepath.Join(sourceDirectory, preloaderFileName)
+	destinationPath := filepath.Join(stagingPath, preloaderFileName)
+
+	if err := requireRegularFile(sourcePath); err != nil {
+		return fmt.Errorf("DLL obrigatória ausente na pasta %q: %w", preloaderDirectory, err)
+	}
+	if err := requireMissingPath(destinationPath); err != nil {
+		return fmt.Errorf("destino da DLL inválido: %w", err)
+	}
+	if err := os.Rename(sourcePath, destinationPath); err != nil {
+		return fmt.Errorf("não foi possível mover a DLL para a raiz: %w", err)
+	}
+	if err := os.Remove(sourceDirectory); err != nil {
+		rollbackErr := os.Rename(destinationPath, sourcePath)
+		if rollbackErr != nil {
+			return fmt.Errorf(
+				"não foi possível remover a pasta de origem: %w; também não foi possível devolver a DLL: %v",
+				err,
+				rollbackErr,
+			)
+		}
+		return fmt.Errorf("não foi possível remover a pasta de origem; a DLL foi devolvida: %w", err)
+	}
+	return nil
 }
 
 type downloadProgressWriter struct {
