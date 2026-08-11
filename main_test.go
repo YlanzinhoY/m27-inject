@@ -12,7 +12,21 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/spf13/cobra"
 )
+
+func TestExplorerMousetrapIsDisabled(t *testing.T) {
+	previousHelpText := cobra.MousetrapHelpText
+	defer func() {
+		cobra.MousetrapHelpText = previousHelpText
+	}()
+
+	cobra.MousetrapHelpText = "command-line warning"
+	disableExplorerMousetrap()
+	if cobra.MousetrapHelpText != "" {
+		t.Fatalf("MousetrapHelpText = %q, want empty", cobra.MousetrapHelpText)
+	}
+}
 
 func TestFindSteamGameFolderInAdditionalLibrary(t *testing.T) {
 	installRoot := t.TempDir()
