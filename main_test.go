@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -251,6 +252,37 @@ func TestDownloadAndExtractRejectsInvalidSHA256(t *testing.T) {
 	}
 }
 
+func TestDownloadIsSkippedWhenCrackIsAlreadyImplemented(t *testing.T) {
+	gamePath := t.TempDir()
+	for _, executableName := range []string{gameExecutableName, backupExecutableName} {
+		if err := os.WriteFile(filepath.Join(gamePath, executableName), []byte(executableName), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requestCount++
+		response.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	err := downloadAndInstallVerified(
+		context.Background(),
+		server.Client(),
+		server.URL,
+		gamePath,
+		expectedArchiveSHA256,
+		nil,
+	)
+	if !errors.Is(err, errCrackAlreadyImplemented) {
+		t.Fatalf("error = %v, want errCrackAlreadyImplemented", err)
+	}
+	if requestCount != 0 {
+		t.Fatalf("download server received %d request(s), want 0", requestCount)
+	}
+}
+
 func TestEndToEndInstallsFixedExecutableWithoutDuplicates(t *testing.T) {
 	archive, err := os.ReadFile(filepath.Join("testdata", "install.rar"))
 	if err != nil {
@@ -403,6 +435,92 @@ func TestInstallationProgressMessageUpdatesModel(t *testing.T) {
 		t.Fatal("expected command waiting for the next progress event")
 	}
 	close(model.installEvents)
+}
+
+func TestAlreadyImplementedMessageShowsSuccessWithoutAnError(t *testing.T) {
+	model := newAppModel()
+	model.screen = installScreen
+	model.selectedPath = `D:\SteamLibrary\steamapps\common\Madden NFL 27`
+
+	updated, command := model.Update(installationFinishedMsg{err: errCrackAlreadyImplemented})
+	model = updated.(appModel)
+	if command != nil {
+		t.Fatal("already implemented result should not return a command")
+	}
+	if model.screen != resultScreen || !model.crackInstalled {
+		t.Fatalf("screen = %v, crackInstalled = %v", model.screen, model.crackInstalled)
+	}
+	view := model.View()
+	if !strings.Contains(view, "CRACK JÁ IMPLEMENTADO") || strings.Contains(view, "NÃO FOI POSSÍVEL CONTINUAR") {
+		t.Fatalf("unexpected already implemented view: %q", view)
+	}
+}
+
+func TestCrackAlreadyImplementedRequiresBothExecutables(t *testing.T) {
+	testCases := []struct {
+		name   string
+		files  []string
+		wanted bool
+	}{
+		{name: "none"},
+		{name: "active only", files: []string{gameExecutableName}},
+		{name: "backup only", files: []string{backupExecutableName}},
+		{name: "both", files: []string{gameExecutableName, backupExecutableName}, wanted: true},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			gamePath := t.TempDir()
+			for _, executableName := range testCase.files {
+				if err := os.WriteFile(filepath.Join(gamePath, executableName), []byte(executableName), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			got, err := crackAlreadyImplemented(gamePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != testCase.wanted {
+				t.Fatalf("crackAlreadyImplemented() = %v, want %v", got, testCase.wanted)
+			}
+		})
+	}
+}
+
+func TestCopyExtractedFilesOverwritesReadOnlyDestination(t *testing.T) {
+	sourcePath := t.TempDir()
+	destinationPath := t.TempDir()
+	fileName := preloaderFileName
+	sourceContent := []byte("new preloader")
+	if err := os.WriteFile(filepath.Join(sourcePath, fileName), sourceContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	destinationFile := filepath.Join(destinationPath, fileName)
+	if err := os.WriteFile(destinationFile, []byte("old preloader"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(destinationFile, 0o400); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyExtractedFiles(sourcePath, destinationPath); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(destinationFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != string(sourceContent) {
+		t.Fatalf("destination content = %q, want %q", content, sourceContent)
+	}
+	info, err := os.Stat(destinationFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o200 == 0 {
+		t.Fatalf("destination remained read-only: mode %v", info.Mode())
+	}
 }
 
 func TestPrepareExecutableInjectionRenamesFilesBeforeCopy(t *testing.T) {
