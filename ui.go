@@ -319,7 +319,7 @@ func (model appModel) steamInstallationsView() string {
 func (model appModel) resultView() string {
 	return successStyle.Render("ARQUIVOS INSTALADOS") +
 		"\n\n" + pathStyle.Render(model.selectedPath) +
-		"\n\n" + mutedStyle.Render("Download concluído e conteúdo do RAR extraído na pasta do Madden.") +
+		"\n\n" + mutedStyle.Render("Download concluído, arquivos extraídos e executável corrigido ativado.") +
 		"\n\n" + mutedStyle.Render("Enter ou q para sair")
 }
 
@@ -336,6 +336,8 @@ func (model appModel) installView() string {
 			model.progress.CompletedFiles,
 			model.progress.TotalFiles,
 		)
+	case stageInjecting:
+		status = "Criando backup e ativando o executável corrigido..."
 	}
 
 	return titleStyle.Render("BAIXANDO E INSTALANDO") +

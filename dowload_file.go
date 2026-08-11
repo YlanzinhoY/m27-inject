@@ -23,6 +23,7 @@ const (
 	stageDownloading installationStage = iota
 	stageExtracting
 	stageCopying
+	stageInjecting
 )
 
 type installationProgress struct {
@@ -36,13 +37,21 @@ type installationProgress struct {
 type progressReporter func(installationProgress)
 
 func downloadFiles(gamePath string) error {
-	return downloadAndExtract(context.Background(), http.DefaultClient, downloadLink, gamePath)
+	return downloadFilesWithProgress(gamePath, nil)
 }
 
 func downloadFilesWithProgress(gamePath string, report progressReporter) error {
-	return downloadAndExtractWithProgress(
+	if err := downloadAndExtractWithProgress(
 		context.Background(), http.DefaultClient, downloadLink, gamePath, report,
-	)
+	); err != nil {
+		return err
+	}
+
+	reportProgress(report, installationProgress{Stage: stageInjecting})
+	if err := injectFile(gamePath); err != nil {
+		return fmt.Errorf("falha ao substituir o executável: %w", err)
+	}
+	return nil
 }
 
 func downloadAndExtract(ctx context.Context, client *http.Client, sourceURL string, gamePath string) error {
