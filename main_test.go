@@ -344,6 +344,27 @@ func TestDownloadProgressIsRendered(t *testing.T) {
 	}
 }
 
+func TestExtractionProgressDoesNotRenderZeroFiles(t *testing.T) {
+	model := newAppModel()
+	model.screen = installScreen
+	model.selectedPath = `C:\Steam\Madden NFL 27`
+	model.progress = installationProgress{Stage: stageExtracting}
+
+	view := model.View()
+	if !strings.Contains(view, "Extraindo o arquivo RAR...") {
+		t.Fatalf("extraction status was not rendered: %q", view)
+	}
+	if strings.Contains(view, "0 arquivo") {
+		t.Fatalf("zero file count should be hidden: %q", view)
+	}
+
+	model.progress.CompletedFiles = 2
+	view = model.View()
+	if !strings.Contains(view, "2 arquivos extraídos") {
+		t.Fatalf("completed extraction count was not rendered: %q", view)
+	}
+}
+
 func TestInstallationProgressMessageUpdatesModel(t *testing.T) {
 	model := newAppModel()
 	model.screen = installScreen
