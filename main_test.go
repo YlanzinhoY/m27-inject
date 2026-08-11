@@ -159,6 +159,12 @@ func TestExtractRARCopiesFilesIntoDestination(t *testing.T) {
 	if info.IsDir() {
 		t.Fatal("extracted version.dll is a directory")
 	}
+	if _, err := os.Stat(filepath.Join(destination, preloaderFileName)); err != nil {
+		t.Fatalf("preloader was not moved to the destination root: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, preloaderDirectory)); !os.IsNotExist(err) {
+		t.Fatalf("preloader source directory should not be copied: %v", err)
+	}
 }
 
 func TestDownloadAndExtractCopiesRARIntoDestination(t *testing.T) {
@@ -190,6 +196,9 @@ func TestDownloadAndExtractCopiesRARIntoDestination(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(destination, "version.dll")); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, preloaderFileName)); err != nil {
+		t.Fatalf("preloader was not moved to the destination root: %v", err)
 	}
 
 	foundDownload := false
@@ -296,12 +305,22 @@ func TestEndToEndInstallsFixedExecutableWithoutDuplicates(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(gamePath, fixedExecutableName)); !os.IsNotExist(err) {
 		t.Fatalf("fixed executable was duplicated in the game folder: %v", err)
 	}
+	preloader, err := os.ReadFile(filepath.Join(gamePath, preloaderFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(preloader) != "preloader dll fixture\n" {
+		t.Fatalf("preloader content = %q", preloader)
+	}
+	if _, err := os.Stat(filepath.Join(gamePath, preloaderDirectory)); !os.IsNotExist(err) {
+		t.Fatalf("preloader source directory was copied to the game folder: %v", err)
+	}
 
 	entries, err := os.ReadDir(gamePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantNames := []string{gameExecutableName, backupExecutableName, "version.dll"}
+	wantNames := []string{gameExecutableName, backupExecutableName, preloaderFileName, "version.dll"}
 	if len(entries) != len(wantNames) {
 		t.Fatalf("game folder contains %d entries, want %d: %v", len(entries), len(wantNames), entries)
 	}
