@@ -12,47 +12,113 @@ const (
 	fixedExecutableName  = "Madden27.fixed.exe"
 )
 
-func injectFile(gamePath string) error {
-	info, err := os.Stat(gamePath)
+type executableInjection struct {
+	gameExecutable   string
+	backupExecutable string
+}
+
+func installExtractedFiles(
+	stagingPath string,
+	gamePath string,
+	totalFiles int,
+	report progressReporter,
+) error {
+	reportProgress(report, installationProgress{Stage: stageInjecting})
+	injection, err := prepareExecutableInjection(gamePath, stagingPath)
 	if err != nil {
-		return fmt.Errorf("não foi possível acessar a pasta do Madden: %w", err)
+		return fmt.Errorf("falha ao preparar o executável corrigido: %w", err)
 	}
-	if !info.IsDir() {
-		return fmt.Errorf("o caminho do Madden não é uma pasta: %q", gamePath)
+
+	reportProgress(report, installationProgress{Stage: stageCopying, TotalFiles: totalFiles})
+	if err := copyExtractedFilesWithProgress(stagingPath, gamePath, totalFiles, report); err != nil {
+		rollbackErr := injection.rollback()
+		if rollbackErr != nil {
+			return fmt.Errorf(
+				"falha ao copiar os arquivos: %w; também não foi possível restaurar o executável original: %v",
+				err,
+				rollbackErr,
+			)
+		}
+		return fmt.Errorf("falha ao copiar os arquivos; o executável original foi restaurado: %w", err)
+	}
+	return nil
+}
+
+func prepareExecutableInjection(gamePath string, stagingPath string) (*executableInjection, error) {
+	if err := requireDirectory(gamePath); err != nil {
+		return nil, fmt.Errorf("pasta do Madden inválida: %w", err)
+	}
+	if err := requireDirectory(stagingPath); err != nil {
+		return nil, fmt.Errorf("pasta temporária inválida: %w", err)
 	}
 
 	gameExecutable := filepath.Join(gamePath, gameExecutableName)
 	backupExecutable := filepath.Join(gamePath, backupExecutableName)
-	fixedExecutable := filepath.Join(gamePath, fixedExecutableName)
+	stagedFixedExecutable := filepath.Join(stagingPath, fixedExecutableName)
+	stagedGameExecutable := filepath.Join(stagingPath, gameExecutableName)
 
 	if err := requireRegularFile(gameExecutable); err != nil {
-		return fmt.Errorf("executável original inválido: %w", err)
+		return nil, fmt.Errorf("executável original inválido: %w", err)
 	}
-	if err := requireRegularFile(fixedExecutable); err != nil {
-		return fmt.Errorf("executável corrigido inválido: %w", err)
+	if err := requireRegularFile(stagedFixedExecutable); err != nil {
+		return nil, fmt.Errorf("executável corrigido inválido: %w", err)
 	}
-	if _, err := os.Lstat(backupExecutable); err == nil {
-		return fmt.Errorf("o backup %q já existe; nenhuma alteração foi feita", backupExecutableName)
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("não foi possível verificar o backup: %w", err)
+	if err := requireMissingPath(backupExecutable); err != nil {
+		return nil, fmt.Errorf("backup inválido: %w", err)
+	}
+	if err := requireMissingPath(stagedGameExecutable); err != nil {
+		return nil, fmt.Errorf("o RAR já contém um %q inesperado: %w", gameExecutableName, err)
 	}
 
 	if err := os.Rename(gameExecutable, backupExecutable); err != nil {
-		return fmt.Errorf("não foi possível criar o backup de %q: %w", gameExecutableName, err)
+		return nil, fmt.Errorf("não foi possível criar o backup de %q: %w", gameExecutableName, err)
 	}
-	if err := os.Rename(fixedExecutable, gameExecutable); err != nil {
+	if err := os.Rename(stagedFixedExecutable, stagedGameExecutable); err != nil {
 		rollbackErr := os.Rename(backupExecutable, gameExecutable)
 		if rollbackErr != nil {
-			return fmt.Errorf(
-				"não foi possível ativar %q: %w; também não foi possível restaurar o original: %v",
+			return nil, fmt.Errorf(
+				"não foi possível preparar %q: %w; também não foi possível restaurar o original: %v",
 				fixedExecutableName,
 				err,
 				rollbackErr,
 			)
 		}
-		return fmt.Errorf("não foi possível ativar %q; o original foi restaurado: %w", fixedExecutableName, err)
+		return nil, fmt.Errorf("não foi possível preparar %q; o original foi restaurado: %w", fixedExecutableName, err)
 	}
 
+	return &executableInjection{
+		gameExecutable:   gameExecutable,
+		backupExecutable: backupExecutable,
+	}, nil
+}
+
+func (injection *executableInjection) rollback() error {
+	if err := os.Remove(injection.gameExecutable); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("não foi possível remover o executável parcial: %w", err)
+	}
+	if err := os.Rename(injection.backupExecutable, injection.gameExecutable); err != nil {
+		return err
+	}
+	return nil
+}
+
+func requireDirectory(directoryPath string) error {
+	info, err := os.Stat(directoryPath)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%q não é uma pasta", directoryPath)
+	}
+	return nil
+}
+
+func requireMissingPath(filePath string) error {
+	if _, err := os.Lstat(filePath); err == nil {
+		return fmt.Errorf("%q já existe", filepath.Base(filePath))
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	return nil
 }
 

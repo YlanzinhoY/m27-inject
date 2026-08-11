@@ -27,8 +27,8 @@ type installationStage int
 const (
 	stageDownloading installationStage = iota
 	stageExtracting
-	stageCopying
 	stageInjecting
+	stageCopying
 )
 
 type installationProgress struct {
@@ -46,22 +46,14 @@ func downloadFiles(gamePath string) error {
 }
 
 func downloadFilesWithProgress(gamePath string, report progressReporter) error {
-	if err := downloadAndExtractVerified(
+	return downloadAndInstallVerified(
 		context.Background(),
 		http.DefaultClient,
 		downloadLink,
 		gamePath,
 		expectedArchiveSHA256,
 		report,
-	); err != nil {
-		return err
-	}
-
-	reportProgress(report, installationProgress{Stage: stageInjecting})
-	if err := injectFile(gamePath); err != nil {
-		return fmt.Errorf("falha ao substituir o executável: %w", err)
-	}
-	return nil
+	)
 }
 
 func downloadAndExtract(ctx context.Context, client *http.Client, sourceURL string, gamePath string) error {
@@ -84,6 +76,29 @@ func downloadAndExtractVerified(
 	sourceURL string,
 	gamePath string,
 	expectedSHA256 string,
+	report progressReporter,
+) error {
+	return downloadAndProcessArchive(ctx, client, sourceURL, gamePath, expectedSHA256, false, report)
+}
+
+func downloadAndInstallVerified(
+	ctx context.Context,
+	client *http.Client,
+	sourceURL string,
+	gamePath string,
+	expectedSHA256 string,
+	report progressReporter,
+) error {
+	return downloadAndProcessArchive(ctx, client, sourceURL, gamePath, expectedSHA256, true, report)
+}
+
+func downloadAndProcessArchive(
+	ctx context.Context,
+	client *http.Client,
+	sourceURL string,
+	gamePath string,
+	expectedSHA256 string,
+	installExecutable bool,
 	report progressReporter,
 ) error {
 	info, err := os.Stat(gamePath)
@@ -156,7 +171,13 @@ func downloadAndExtractVerified(
 		)
 	}
 
-	if err := extractRARWithOptions(archivePath, gamePath, expectedSHA256 != "", report); err != nil {
+	if err := extractRARWithOptions(
+		archivePath,
+		gamePath,
+		expectedSHA256 != "",
+		installExecutable,
+		report,
+	); err != nil {
 		return fmt.Errorf("falha ao extrair os arquivos: %w", err)
 	}
 	return nil
@@ -167,17 +188,18 @@ func extractRAR(archivePath string, gamePath string) error {
 }
 
 func extractRARWithProgress(archivePath string, gamePath string, report progressReporter) error {
-	return extractRARWithOptions(archivePath, gamePath, false, report)
+	return extractRARWithOptions(archivePath, gamePath, false, false, report)
 }
 
 func extractRARWithOptions(
 	archivePath string,
 	gamePath string,
 	verifiedArchive bool,
+	installExecutable bool,
 	report progressReporter,
 ) error {
 	if verifiedArchive {
-		return extractRARWithNativeTar(archivePath, gamePath, report)
+		return extractRARWithNativeTar(archivePath, gamePath, installExecutable, report)
 	}
 	return extractRARWithDecoder(archivePath, gamePath, report)
 }
@@ -260,7 +282,12 @@ func extractRARWithDecoder(archivePath string, gamePath string, report progressR
 	return copyExtractedFilesWithProgress(stagingPath, gamePath, fileCount, report)
 }
 
-func extractRARWithNativeTar(archivePath string, gamePath string, report progressReporter) error {
+func extractRARWithNativeTar(
+	archivePath string,
+	gamePath string,
+	installExecutable bool,
+	report progressReporter,
+) error {
 	reportProgress(report, installationProgress{Stage: stageExtracting})
 
 	tarPath, err := exec.LookPath("tar.exe")
@@ -323,10 +350,11 @@ func extractRARWithNativeTar(archivePath string, gamePath string, report progres
 		return fmt.Errorf("o arquivo RAR não contém arquivos")
 	}
 
-	reportProgress(report, installationProgress{
-		Stage:      stageCopying,
-		TotalFiles: fileCount,
-	})
+	if installExecutable {
+		return installExtractedFiles(stagingPath, gamePath, fileCount, report)
+	}
+
+	reportProgress(report, installationProgress{Stage: stageCopying, TotalFiles: fileCount})
 	return copyExtractedFilesWithProgress(stagingPath, gamePath, fileCount, report)
 }
 
