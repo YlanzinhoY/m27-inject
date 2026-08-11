@@ -36,7 +36,11 @@ func newRootCommand() *cobra.Command {
 
 			model, ok := finalModel.(appModel)
 			if ok && model.screen == resultScreen && model.selectedPath != "" {
-				fmt.Fprintf(command.OutOrStdout(), "Arquivos instalados em: %s\n", model.selectedPath)
+				if model.crackInstalled {
+					fmt.Fprintf(command.OutOrStdout(), "Crack já implementado em: %s\n", model.selectedPath)
+				} else {
+					fmt.Fprintf(command.OutOrStdout(), "Arquivos instalados em: %s\n", model.selectedPath)
+				}
 			}
 			return nil
 		},

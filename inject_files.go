@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,9 +13,28 @@ const (
 	fixedExecutableName  = "Madden27.fixed.exe"
 )
 
+var errCrackAlreadyImplemented = errors.New("crack já foi implementado")
+
 type executableInjection struct {
 	gameExecutable   string
 	backupExecutable string
+}
+
+func crackAlreadyImplemented(gamePath string) (bool, error) {
+	for _, executableName := range []string{gameExecutableName, backupExecutableName} {
+		executablePath := filepath.Join(gamePath, executableName)
+		info, err := os.Lstat(executablePath)
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("não foi possível verificar %q: %w", executableName, err)
+		}
+		if !info.Mode().IsRegular() {
+			return false, fmt.Errorf("%q existe, mas não é um arquivo comum", executableName)
+		}
+	}
+	return true, nil
 }
 
 func installExtractedFiles(

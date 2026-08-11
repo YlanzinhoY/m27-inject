@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -56,6 +57,7 @@ type appModel struct {
 	errorMessage   string
 	installEvents  chan tea.Msg
 	progress       installationProgress
+	crackInstalled bool
 	width          int
 }
 
@@ -74,6 +76,11 @@ func (model appModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return model, nil
 	case installationFinishedMsg:
 		model.installEvents = nil
+		if errors.Is(message.err, errCrackAlreadyImplemented) {
+			model.crackInstalled = true
+			model.screen = resultScreen
+			return model, nil
+		}
 		if message.err != nil {
 			model.showError(model.previousScreen, message.err.Error())
 			return model, nil
@@ -203,6 +210,7 @@ func (model appModel) updateSteamInstallationsScreen(key tea.KeyMsg) (tea.Model,
 func (model appModel) beginInstallation(previous screen) (tea.Model, tea.Cmd) {
 	model.previousScreen = previous
 	model.screen = installScreen
+	model.crackInstalled = false
 	model.progress = installationProgress{Stage: stageDownloading}
 	model.installEvents = make(chan tea.Msg)
 	return model, installFiles(model.selectedPath, model.installEvents)
@@ -317,6 +325,12 @@ func (model appModel) steamInstallationsView() string {
 }
 
 func (model appModel) resultView() string {
+	if model.crackInstalled {
+		return successStyle.Render("CRACK JÁ IMPLEMENTADO") +
+			"\n\n" + pathStyle.Render(model.selectedPath) +
+			"\n\n" + mutedStyle.Render("Madden27.exe e Madden27_original.exe já existem. Nenhum arquivo foi alterado.") +
+			"\n\n" + mutedStyle.Render("Enter ou q para sair")
+	}
 	return successStyle.Render("ARQUIVOS INSTALADOS") +
 		"\n\n" + pathStyle.Render(model.selectedPath) +
 		"\n\n" + mutedStyle.Render("Download concluído, arquivos extraídos e executável corrigido ativado.") +

@@ -110,6 +110,15 @@ func downloadAndProcessArchive(
 	if !info.IsDir() {
 		return fmt.Errorf("o caminho do Madden não é uma pasta: %q", gamePath)
 	}
+	if installExecutable {
+		alreadyImplemented, statusErr := crackAlreadyImplemented(gamePath)
+		if statusErr != nil {
+			return fmt.Errorf("não foi possível verificar a instalação existente: %w", statusErr)
+		}
+		if alreadyImplemented {
+			return errCrackAlreadyImplemented
+		}
+	}
 
 	archive, err := os.CreateTemp("", "madden-27-*.rar")
 	if err != nil {
@@ -180,6 +189,9 @@ func downloadAndProcessArchive(
 		installExecutable,
 		report,
 	); err != nil {
+		if installExecutable {
+			return fmt.Errorf("falha ao instalar os arquivos: %w", err)
+		}
 		return fmt.Errorf("falha ao extrair os arquivos: %w", err)
 	}
 	return nil
@@ -481,32 +493,37 @@ func copyExtractedFilesWithProgress(
 
 		info, err := entry.Info()
 		if err != nil {
-			return err
+			return fmt.Errorf("não foi possível ler os metadados de %q: %w", relative, err)
 		}
 		input, err := os.Open(sourcePath)
 		if err != nil {
-			return err
+			return fmt.Errorf("não foi possível abrir a origem %q: %w", relative, err)
 		}
-		output, err := os.OpenFile(destinationPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
+		if err := makeDestinationWritable(destinationPath); err != nil {
+			input.Close()
+			return fmt.Errorf("não foi possível preparar o destino %q: %w", relative, err)
+		}
+		outputMode := info.Mode().Perm() | 0o200
+		output, err := os.OpenFile(destinationPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, outputMode)
 		if err != nil {
 			input.Close()
-			return err
+			return fmt.Errorf("não foi possível abrir o destino %q: %w", relative, err)
 		}
 
 		_, copyErr := io.Copy(output, input)
 		inputCloseErr := input.Close()
 		outputCloseErr := output.Close()
 		if copyErr != nil {
-			return copyErr
+			return fmt.Errorf("não foi possível copiar %q: %w", relative, copyErr)
 		}
 		if inputCloseErr != nil {
-			return inputCloseErr
+			return fmt.Errorf("não foi possível fechar a origem %q: %w", relative, inputCloseErr)
 		}
 		if outputCloseErr != nil {
-			return outputCloseErr
+			return fmt.Errorf("não foi possível fechar o destino %q: %w", relative, outputCloseErr)
 		}
 		if err := os.Chtimes(destinationPath, info.ModTime(), info.ModTime()); err != nil {
-			return err
+			return fmt.Errorf("não foi possível atualizar a data de %q: %w", relative, err)
 		}
 		copiedFiles++
 		reportProgress(report, installationProgress{
@@ -516,4 +533,24 @@ func copyExtractedFilesWithProgress(
 		})
 		return nil
 	})
+}
+
+func makeDestinationWritable(destinationPath string) error {
+	info, err := os.Lstat(destinationPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("o destino existente não é um arquivo comum")
+	}
+	if info.Mode().Perm()&0o200 != 0 {
+		return nil
+	}
+	if err := os.Chmod(destinationPath, info.Mode().Perm()|0o200); err != nil {
+		return fmt.Errorf("não foi possível remover o atributo somente leitura: %w", err)
+	}
+	return nil
 }
