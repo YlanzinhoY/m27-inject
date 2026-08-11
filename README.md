@@ -43,6 +43,8 @@ Use as setas para navegar, `Enter` para confirmar e `Esc` para voltar. Durante a
 
 O programa não sobrescreve um `Madden27_original.exe` existente. Essa proteção evita a perda de um backup criado anteriormente.
 
+Se `Madden27.exe` e `Madden27_original.exe` já existirem como arquivos comuns, o programa considera que a correção já foi implementada, não inicia outro download e não altera a pasta do jogo.
+
 ## Restaurar o executável original
 
 Para restaurar somente o executável original:
@@ -61,7 +63,7 @@ Escolha **Informar o caminho completo** e selecione a pasta que termina em `stea
 
 ### O backup já existe
 
-O programa interrompe a instalação para não sobrescrever `Madden27_original.exe`. Verifique os executáveis existentes e restaure ou guarde o backup antes de tentar novamente.
+Quando `Madden27.exe` e `Madden27_original.exe` existem juntos, o programa informa que a correção já foi implementada e não altera nenhum arquivo. Se apenas o backup existir, a instalação é interrompida para evitar perda de dados; verifique os executáveis antes de tentar novamente.
 
 ### Falha de checksum
 
@@ -69,7 +71,7 @@ O download recebido é diferente do pacote esperado. Execute novamente para faze
 
 ### Falha de permissão
 
-Confira se o jogo e a Steam estão fechados. Se a pasta continuar bloqueada, execute o programa com uma conta que tenha permissão de escrita sobre a instalação do jogo.
+O programa remove automaticamente o atributo somente leitura dos arquivos que precisa atualizar. Confira se o jogo e a Steam estão fechados. Se a pasta continuar bloqueada, execute o programa com uma conta que tenha permissão de escrita sobre a instalação do jogo.
 
 ## Desenvolvimento
 
