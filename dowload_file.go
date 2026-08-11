@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
@@ -172,16 +173,19 @@ func extractRARWithProgress(archivePath string, gamePath string, report progress
 func extractRARWithOptions(
 	archivePath string,
 	gamePath string,
-	skipInternalChecksum bool,
+	verifiedArchive bool,
 	report progressReporter,
 ) error {
+	if verifiedArchive {
+		return extractRARWithNativeTar(archivePath, gamePath, report)
+	}
+	return extractRARWithDecoder(archivePath, gamePath, report)
+}
+
+func extractRARWithDecoder(archivePath string, gamePath string, report progressReporter) error {
 	reportProgress(report, installationProgress{Stage: stageExtracting})
 
-	options := make([]rardecode.Option, 0, 1)
-	if skipInternalChecksum {
-		options = append(options, rardecode.SkipCheck)
-	}
-	reader, err := rardecode.OpenReader(archivePath, options...)
+	reader, err := rardecode.OpenReader(archivePath)
 	if err != nil {
 		return err
 	}
@@ -249,6 +253,76 @@ func extractRARWithOptions(
 	if fileCount == 0 {
 		return fmt.Errorf("o arquivo RAR não contém arquivos")
 	}
+	reportProgress(report, installationProgress{
+		Stage:      stageCopying,
+		TotalFiles: fileCount,
+	})
+	return copyExtractedFilesWithProgress(stagingPath, gamePath, fileCount, report)
+}
+
+func extractRARWithNativeTar(archivePath string, gamePath string, report progressReporter) error {
+	reportProgress(report, installationProgress{Stage: stageExtracting})
+
+	tarPath, err := exec.LookPath("tar.exe")
+	if err != nil {
+		return fmt.Errorf("o extrator nativo do Windows (tar.exe) não foi encontrado: %w", err)
+	}
+
+	stagingPath, err := os.MkdirTemp("", "madden-27-extract-*")
+	if err != nil {
+		return fmt.Errorf("não foi possível criar a pasta temporária: %w", err)
+	}
+	defer os.RemoveAll(stagingPath)
+
+	listOutput, err := exec.Command(tarPath, "-tf", archivePath).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("não foi possível listar o RAR: %w: %s", err, strings.TrimSpace(string(listOutput)))
+	}
+	entryCount := 0
+	for _, entryName := range strings.Split(strings.ReplaceAll(string(listOutput), "\r\n", "\n"), "\n") {
+		entryName = strings.TrimSuffix(entryName, "\r")
+		if entryName == "" {
+			continue
+		}
+		if _, err := archiveDestination(stagingPath, entryName); err != nil {
+			return err
+		}
+		entryCount++
+	}
+	if entryCount == 0 {
+		return fmt.Errorf("o arquivo RAR não contém arquivos")
+	}
+
+	extractOutput, err := exec.Command(tarPath, "-xf", archivePath, "-C", stagingPath).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("não foi possível extrair o RAR: %w: %s", err, strings.TrimSpace(string(extractOutput)))
+	}
+
+	fileCount := 0
+	err = filepath.WalkDir(stagingPath, func(_ string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("tipo de arquivo não permitido no RAR: %q", entry.Name())
+		}
+		fileCount++
+		reportProgress(report, installationProgress{
+			Stage:          stageExtracting,
+			CompletedFiles: fileCount,
+		})
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if fileCount == 0 {
+		return fmt.Errorf("o arquivo RAR não contém arquivos")
+	}
+
 	reportProgress(report, installationProgress{
 		Stage:      stageCopying,
 		TotalFiles: fileCount,

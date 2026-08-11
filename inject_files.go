@@ -9,7 +9,7 @@ import (
 const (
 	gameExecutableName   = "Madden27.exe"
 	backupExecutableName = "Madden27_original.exe"
-	fixedExecutableName  = "Madden.fixed.exe"
+	fixedExecutableName  = "Madden27.fixed.exe"
 )
 
 func injectFile(gamePath string) error {
