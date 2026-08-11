@@ -23,6 +23,10 @@ type installationFinishedMsg struct {
 	err error
 }
 
+type installationProgressMsg struct {
+	progress installationProgress
+}
+
 var (
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -50,6 +54,8 @@ type appModel struct {
 	steamPaths     []string
 	selectedPath   string
 	errorMessage   string
+	installEvents  chan tea.Msg
+	progress       installationProgress
 	width          int
 }
 
@@ -67,12 +73,19 @@ func (model appModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.width = message.Width
 		return model, nil
 	case installationFinishedMsg:
+		model.installEvents = nil
 		if message.err != nil {
 			model.showError(model.previousScreen, message.err.Error())
 			return model, nil
 		}
 		model.screen = resultScreen
 		return model, nil
+	case installationProgressMsg:
+		model.progress = message.progress
+		if model.installEvents == nil {
+			return model, nil
+		}
+		return model, waitForInstallEvent(model.installEvents)
 	case tea.KeyMsg:
 		if message.Type == tea.KeyCtrlC {
 			return model, tea.Quit
@@ -120,9 +133,7 @@ func (model appModel) updateSourceScreen(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				))
 			case 1:
 				model.selectedPath = model.steamPaths[0]
-				model.previousScreen = sourceScreen
-				model.screen = installScreen
-				return model, installFiles(model.selectedPath)
+				return model.beginInstallation(sourceScreen)
 			default:
 				model.cursor = 0
 				model.screen = steamInstallationsScreen
@@ -152,9 +163,7 @@ func (model appModel) updateManualPathScreen(key tea.KeyMsg) (tea.Model, tea.Cmd
 			return model, nil
 		}
 		model.selectedPath = path
-		model.previousScreen = manualPathScreen
-		model.screen = installScreen
-		return model, installFiles(model.selectedPath)
+		return model.beginInstallation(manualPathScreen)
 	case tea.KeyBackspace, tea.KeyDelete:
 		runes := []rune(model.pathInput)
 		if len(runes) > 0 {
@@ -183,9 +192,7 @@ func (model appModel) updateSteamInstallationsScreen(key tea.KeyMsg) (tea.Model,
 		}
 	case tea.KeyEnter:
 		model.selectedPath = model.steamPaths[model.cursor]
-		model.previousScreen = steamInstallationsScreen
-		model.screen = installScreen
-		return model, installFiles(model.selectedPath)
+		return model.beginInstallation(steamInstallationsScreen)
 	case tea.KeyEsc:
 		model.cursor = 0
 		model.screen = sourceScreen
@@ -193,9 +200,30 @@ func (model appModel) updateSteamInstallationsScreen(key tea.KeyMsg) (tea.Model,
 	return model, nil
 }
 
-func installFiles(gamePath string) tea.Cmd {
+func (model appModel) beginInstallation(previous screen) (tea.Model, tea.Cmd) {
+	model.previousScreen = previous
+	model.screen = installScreen
+	model.progress = installationProgress{Stage: stageDownloading}
+	model.installEvents = make(chan tea.Msg)
+	return model, installFiles(model.selectedPath, model.installEvents)
+}
+
+func installFiles(gamePath string, events chan tea.Msg) tea.Cmd {
 	return func() tea.Msg {
-		return installationFinishedMsg{err: downloadFiles(gamePath)}
+		go func() {
+			err := downloadFilesWithProgress(gamePath, func(progress installationProgress) {
+				events <- installationProgressMsg{progress: progress}
+			})
+			events <- installationFinishedMsg{err: err}
+			close(events)
+		}()
+		return <-events
+	}
+}
+
+func waitForInstallEvent(events <-chan tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		return <-events
 	}
 }
 
@@ -296,10 +324,74 @@ func (model appModel) resultView() string {
 }
 
 func (model appModel) installView() string {
+	var status string
+	switch model.progress.Stage {
+	case stageDownloading:
+		status = model.downloadProgressView()
+	case stageExtracting:
+		status = fmt.Sprintf("Extraindo o arquivo RAR... %d arquivo(s)", model.progress.CompletedFiles)
+	case stageCopying:
+		status = fmt.Sprintf(
+			"Copiando para a pasta do Madden... %d/%d arquivo(s)",
+			model.progress.CompletedFiles,
+			model.progress.TotalFiles,
+		)
+	}
+
 	return titleStyle.Render("BAIXANDO E INSTALANDO") +
 		"\n\n" + pathStyle.Render(model.selectedPath) +
-		"\n\n" + mutedStyle.Render("Aguarde enquanto o arquivo RAR é baixado e extraído...") +
+		"\n\n" + status +
 		"\n\n" + mutedStyle.Render("Ctrl+C para cancelar")
+}
+
+func (model appModel) downloadProgressView() string {
+	if model.progress.TotalBytes == 0 && model.progress.Downloaded == 0 {
+		return mutedStyle.Render("Conectando ao servidor...")
+	}
+	if model.progress.TotalBytes <= 0 {
+		return mutedStyle.Render("Baixado: " + formatBytes(model.progress.Downloaded))
+	}
+
+	percentage := int(float64(model.progress.Downloaded) / float64(model.progress.TotalBytes) * 100)
+	if percentage > 100 {
+		percentage = 100
+	}
+	if percentage < 0 {
+		percentage = 0
+	}
+
+	barWidth := 42
+	if model.width > 0 && model.width-10 < barWidth {
+		barWidth = model.width - 10
+	}
+	if barWidth < 10 {
+		barWidth = 10
+	}
+	filled := barWidth * percentage / 100
+	bar := successStyle.Render(strings.Repeat("█", filled)) +
+		mutedStyle.Render(strings.Repeat("░", barWidth-filled))
+
+	return bar + fmt.Sprintf(
+		"  %d%%\n%s",
+		percentage,
+		mutedStyle.Render(formatBytes(model.progress.Downloaded)+" / "+formatBytes(model.progress.TotalBytes)),
+	)
+}
+
+func formatBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+
+	value := float64(bytes)
+	units := []string{"KB", "MB", "GB", "TB"}
+	unitIndex := -1
+	for value >= unit && unitIndex < len(units)-1 {
+		value /= unit
+		unitIndex++
+	}
+	return fmt.Sprintf("%.1f %s", value, units[unitIndex])
 }
 
 func (model appModel) errorView() string {

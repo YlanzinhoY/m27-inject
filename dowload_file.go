@@ -10,17 +10,52 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/nwaples/rardecode/v2"
 )
 
 const downloadLink = "https://pixeldrain.com/api/file/AXCPM2gM"
 
+type installationStage int
+
+const (
+	stageDownloading installationStage = iota
+	stageExtracting
+	stageCopying
+)
+
+type installationProgress struct {
+	Stage          installationStage
+	Downloaded     int64
+	TotalBytes     int64
+	CompletedFiles int
+	TotalFiles     int
+}
+
+type progressReporter func(installationProgress)
+
 func downloadFiles(gamePath string) error {
 	return downloadAndExtract(context.Background(), http.DefaultClient, downloadLink, gamePath)
 }
 
+func downloadFilesWithProgress(gamePath string, report progressReporter) error {
+	return downloadAndExtractWithProgress(
+		context.Background(), http.DefaultClient, downloadLink, gamePath, report,
+	)
+}
+
 func downloadAndExtract(ctx context.Context, client *http.Client, sourceURL string, gamePath string) error {
+	return downloadAndExtractWithProgress(ctx, client, sourceURL, gamePath, nil)
+}
+
+func downloadAndExtractWithProgress(
+	ctx context.Context,
+	client *http.Client,
+	sourceURL string,
+	gamePath string,
+	report progressReporter,
+) error {
 	info, err := os.Stat(gamePath)
 	if err != nil {
 		return fmt.Errorf("não foi possível acessar a pasta do Madden: %w", err)
@@ -55,7 +90,18 @@ func downloadAndExtract(ctx context.Context, client *http.Client, sourceURL stri
 		return fmt.Errorf("falha ao baixar os arquivos: servidor respondeu %s", response.Status)
 	}
 
-	written, copyErr := io.Copy(archive, response.Body)
+	reportProgress(report, installationProgress{
+		Stage:      stageDownloading,
+		TotalBytes: response.ContentLength,
+	})
+	download := &downloadProgressWriter{
+		writer:     archive,
+		totalBytes: response.ContentLength,
+		report:     report,
+		lastReport: time.Now(),
+	}
+	written, copyErr := io.Copy(download, response.Body)
+	download.finish()
 	responseCloseErr := response.Body.Close()
 	closeErr := archive.Close()
 	if copyErr != nil {
@@ -71,13 +117,19 @@ func downloadAndExtract(ctx context.Context, client *http.Client, sourceURL stri
 		return fmt.Errorf("o servidor retornou um arquivo vazio")
 	}
 
-	if err := extractRAR(archivePath, gamePath); err != nil {
+	if err := extractRARWithProgress(archivePath, gamePath, report); err != nil {
 		return fmt.Errorf("falha ao extrair os arquivos: %w", err)
 	}
 	return nil
 }
 
 func extractRAR(archivePath string, gamePath string) error {
+	return extractRARWithProgress(archivePath, gamePath, nil)
+}
+
+func extractRARWithProgress(archivePath string, gamePath string, report progressReporter) error {
+	reportProgress(report, installationProgress{Stage: stageExtracting})
+
 	reader, err := rardecode.OpenReader(archivePath)
 	if err != nil {
 		return err
@@ -137,12 +189,59 @@ func extractRAR(archivePath string, gamePath string) error {
 			_ = os.Chtimes(target, header.ModificationTime, header.ModificationTime)
 		}
 		fileCount++
+		reportProgress(report, installationProgress{
+			Stage:          stageExtracting,
+			CompletedFiles: fileCount,
+		})
 	}
 
 	if fileCount == 0 {
 		return fmt.Errorf("o arquivo RAR não contém arquivos")
 	}
-	return copyExtractedFiles(stagingPath, gamePath)
+	reportProgress(report, installationProgress{
+		Stage:      stageCopying,
+		TotalFiles: fileCount,
+	})
+	return copyExtractedFilesWithProgress(stagingPath, gamePath, fileCount, report)
+}
+
+type downloadProgressWriter struct {
+	writer     io.Writer
+	totalBytes int64
+	written    int64
+	lastReport time.Time
+	report     progressReporter
+}
+
+func (writer *downloadProgressWriter) Write(data []byte) (int, error) {
+	written, err := writer.writer.Write(data)
+	writer.written += int64(written)
+
+	now := time.Now()
+	if now.Sub(writer.lastReport) >= 100*time.Millisecond ||
+		(writer.totalBytes > 0 && writer.written >= writer.totalBytes) {
+		writer.sendProgress()
+		writer.lastReport = now
+	}
+	return written, err
+}
+
+func (writer *downloadProgressWriter) finish() {
+	writer.sendProgress()
+}
+
+func (writer *downloadProgressWriter) sendProgress() {
+	reportProgress(writer.report, installationProgress{
+		Stage:      stageDownloading,
+		Downloaded: writer.written,
+		TotalBytes: writer.totalBytes,
+	})
+}
+
+func reportProgress(report progressReporter, progress installationProgress) {
+	if report != nil {
+		report(progress)
+	}
 }
 
 func archiveDestination(root string, archiveName string) (string, error) {
@@ -163,6 +262,16 @@ func archiveDestination(root string, archiveName string) (string, error) {
 }
 
 func copyExtractedFiles(sourceRoot string, destinationRoot string) error {
+	return copyExtractedFilesWithProgress(sourceRoot, destinationRoot, 0, nil)
+}
+
+func copyExtractedFilesWithProgress(
+	sourceRoot string,
+	destinationRoot string,
+	totalFiles int,
+	report progressReporter,
+) error {
+	copiedFiles := 0
 	return filepath.WalkDir(sourceRoot, func(sourcePath string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -207,6 +316,15 @@ func copyExtractedFiles(sourceRoot string, destinationRoot string) error {
 		if outputCloseErr != nil {
 			return outputCloseErr
 		}
-		return os.Chtimes(destinationPath, info.ModTime(), info.ModTime())
+		if err := os.Chtimes(destinationPath, info.ModTime(), info.ModTime()); err != nil {
+			return err
+		}
+		copiedFiles++
+		reportProgress(report, installationProgress{
+			Stage:          stageCopying,
+			CompletedFiles: copiedFiles,
+			TotalFiles:     totalFiles,
+		})
+		return nil
 	})
 }
