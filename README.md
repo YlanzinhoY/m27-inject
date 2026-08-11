@@ -15,9 +15,9 @@ Durante a instalação, o programa verifica o SHA-256 do download e preserva o e
 ## Como usar
 
 1. Acesse a página de [Releases](https://github.com/YlanzinhoY/m27-inject/releases).
-2. Baixe o arquivo `madden-27-inject.exe` da versão mais recente.
+2. Baixe o arquivo `m27-inject.exe` da versão mais recente.
 3. Feche o Madden NFL 27 e a Steam.
-4. Execute `madden-27-inject.exe`.
+4. Execute `m27-inject.exe`.
 5. Escolha uma das opções na interface:
    - **Procurar automaticamente na Steam**: procura o jogo nas bibliotecas configuradas na Steam;
    - **Informar o caminho completo**: permite informar manualmente a pasta `Madden NFL 27`.
@@ -77,7 +77,7 @@ O projeto usa Go 1.26.1.
 ```powershell
 go mod download
 go test ./...
-go build -o bin/madden-27-inject.exe .
+go build -o bin/m27-inject.exe .
 ```
 
 ## Licença
