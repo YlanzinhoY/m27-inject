@@ -36,9 +36,10 @@ Use as setas para navegar, `Enter` para confirmar e `Esc` para voltar. Durante a
 1. Baixa o arquivo RAR para uma área temporária.
 2. Valida o checksum SHA-256 do arquivo baixado.
 3. Extrai o conteúdo para uma pasta temporária.
-4. Renomeia o `Madden27.exe` instalado para `Madden27_original.exe`.
-5. Renomeia o `Madden27.fixed.exe` extraído para `Madden27.exe`.
-6. Copia os arquivos extraídos para a pasta do jogo.
+4. Move `preloader_l.dll` da subpasta do pacote para a raiz dos arquivos extraídos.
+5. Renomeia o `Madden27.exe` instalado para `Madden27_original.exe`.
+6. Renomeia o `Madden27.fixed.exe` extraído para `Madden27.exe`.
+7. Copia os arquivos extraídos para a pasta do jogo.
 
 O programa não sobrescreve um `Madden27_original.exe` existente. Essa proteção evita a perda de um backup criado anteriormente.
 
