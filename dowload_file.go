@@ -121,7 +121,7 @@ func downloadAndProcessArchive(
 		archive.Close()
 		return fmt.Errorf("não foi possível preparar o download: %w", err)
 	}
-	request.Header.Set("User-Agent", "madden-27-inject/1.0")
+	request.Header.Set("User-Agent", "m27-inject/1.0")
 
 	response, err := client.Do(request)
 	if err != nil {

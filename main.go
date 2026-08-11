@@ -22,7 +22,7 @@ func disableExplorerMousetrap() {
 
 func newRootCommand() *cobra.Command {
 	command := &cobra.Command{
-		Use:           "madden-27-inject",
+		Use:           "m27-inject",
 		Short:         "Localiza a instalação do Madden NFL 27",
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
