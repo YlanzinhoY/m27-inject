@@ -230,6 +230,88 @@ func TestInstallationProgressMessageUpdatesModel(t *testing.T) {
 	close(model.installEvents)
 }
 
+func TestInjectFileBacksUpAndActivatesFixedExecutable(t *testing.T) {
+	gamePath := t.TempDir()
+	originalContent := []byte("original executable")
+	fixedContent := []byte("fixed executable")
+	if err := os.WriteFile(filepath.Join(gamePath, gameExecutableName), originalContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gamePath, fixedExecutableName), fixedContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := injectFile(gamePath); err != nil {
+		t.Fatal(err)
+	}
+	backup, err := os.ReadFile(filepath.Join(gamePath, backupExecutableName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := os.ReadFile(filepath.Join(gamePath, gameExecutableName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(backup) != string(originalContent) {
+		t.Fatalf("backup content = %q, want %q", backup, originalContent)
+	}
+	if string(active) != string(fixedContent) {
+		t.Fatalf("active content = %q, want %q", active, fixedContent)
+	}
+	if _, err := os.Stat(filepath.Join(gamePath, fixedExecutableName)); !os.IsNotExist(err) {
+		t.Fatalf("fixed executable still exists after rename: %v", err)
+	}
+}
+
+func TestInjectFileDoesNotChangeOriginalWhenFixedIsMissing(t *testing.T) {
+	gamePath := t.TempDir()
+	originalContent := []byte("original executable")
+	if err := os.WriteFile(filepath.Join(gamePath, gameExecutableName), originalContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := injectFile(gamePath); err == nil {
+		t.Fatal("expected an error for missing fixed executable")
+	}
+	active, err := os.ReadFile(filepath.Join(gamePath, gameExecutableName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(active) != string(originalContent) {
+		t.Fatalf("original content changed: %q", active)
+	}
+	if _, err := os.Stat(filepath.Join(gamePath, backupExecutableName)); !os.IsNotExist(err) {
+		t.Fatalf("backup was created despite validation failure: %v", err)
+	}
+}
+
+func TestInjectFileRefusesToOverwriteExistingBackup(t *testing.T) {
+	gamePath := t.TempDir()
+	files := map[string]string{
+		gameExecutableName:   "current",
+		fixedExecutableName:  "fixed",
+		backupExecutableName: "existing backup",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(gamePath, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := injectFile(gamePath); err == nil {
+		t.Fatal("expected an error for existing backup")
+	}
+	for name, want := range files {
+		content, err := os.ReadFile(filepath.Join(gamePath, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(content) != want {
+			t.Fatalf("%s content = %q, want %q", name, content, want)
+		}
+	}
+}
+
 func TestInstallationFinishedChangesScreen(t *testing.T) {
 	model := newAppModel()
 	model.screen = installScreen
