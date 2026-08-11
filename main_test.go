@@ -242,6 +242,91 @@ func TestDownloadAndExtractRejectsInvalidSHA256(t *testing.T) {
 	}
 }
 
+func TestEndToEndInstallsFixedExecutableWithoutDuplicates(t *testing.T) {
+	archive, err := os.ReadFile(filepath.Join("testdata", "install.rar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/vnd.rar")
+		response.WriteHeader(http.StatusOK)
+		_, _ = response.Write(archive)
+	}))
+	defer server.Close()
+
+	gamePath := filepath.Join(t.TempDir(), gameFolderName)
+	if err := os.Mkdir(gamePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	originalContent := []byte("fake original Madden27.exe")
+	if err := os.WriteFile(filepath.Join(gamePath, gameExecutableName), originalContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	checksum := sha256.Sum256(archive)
+	var stages []installationStage
+	err = downloadAndInstallVerified(
+		context.Background(),
+		server.Client(),
+		server.URL,
+		gamePath,
+		fmt.Sprintf("%x", checksum[:]),
+		func(progress installationProgress) {
+			stages = append(stages, progress.Stage)
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	backup, err := os.ReadFile(filepath.Join(gamePath, backupExecutableName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := os.ReadFile(filepath.Join(gamePath, gameExecutableName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(backup) != string(originalContent) {
+		t.Fatalf("backup content = %q, want %q", backup, originalContent)
+	}
+	if string(active) != "fixed executable fixture\n" {
+		t.Fatalf("active executable content = %q", active)
+	}
+	if _, err := os.Stat(filepath.Join(gamePath, fixedExecutableName)); !os.IsNotExist(err) {
+		t.Fatalf("fixed executable was duplicated in the game folder: %v", err)
+	}
+
+	entries, err := os.ReadDir(gamePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantNames := []string{gameExecutableName, backupExecutableName, "version.dll"}
+	if len(entries) != len(wantNames) {
+		t.Fatalf("game folder contains %d entries, want %d: %v", len(entries), len(wantNames), entries)
+	}
+	for index, want := range wantNames {
+		if entries[index].Name() != want {
+			t.Fatalf("entry %d = %q, want %q", index, entries[index].Name(), want)
+		}
+	}
+
+	injectIndex := firstStageIndex(stages, stageInjecting)
+	copyIndex := firstStageIndex(stages, stageCopying)
+	if injectIndex < 0 || copyIndex < 0 || injectIndex >= copyIndex {
+		t.Fatalf("stages = %v, want injection before copy", stages)
+	}
+}
+
+func firstStageIndex(stages []installationStage, wanted installationStage) int {
+	for index, stage := range stages {
+		if stage == wanted {
+			return index
+		}
+	}
+	return -1
+}
+
 func TestDownloadProgressIsRendered(t *testing.T) {
 	model := newAppModel()
 	model.screen = installScreen
@@ -280,18 +365,67 @@ func TestInstallationProgressMessageUpdatesModel(t *testing.T) {
 	close(model.installEvents)
 }
 
-func TestInjectFileBacksUpAndActivatesFixedExecutable(t *testing.T) {
+func TestPrepareExecutableInjectionRenamesFilesBeforeCopy(t *testing.T) {
 	gamePath := t.TempDir()
+	stagingPath := t.TempDir()
 	originalContent := []byte("original executable")
 	fixedContent := []byte("fixed executable")
 	if err := os.WriteFile(filepath.Join(gamePath, gameExecutableName), originalContent, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(gamePath, fixedExecutableName), fixedContent, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(stagingPath, fixedExecutableName), fixedContent, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := injectFile(gamePath); err != nil {
+	injection, err := prepareExecutableInjection(gamePath, stagingPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backup, err := os.ReadFile(filepath.Join(gamePath, backupExecutableName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := os.ReadFile(filepath.Join(stagingPath, gameExecutableName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(backup) != string(originalContent) {
+		t.Fatalf("backup content = %q, want %q", backup, originalContent)
+	}
+	if string(staged) != string(fixedContent) {
+		t.Fatalf("staged content = %q, want %q", staged, fixedContent)
+	}
+	if _, err := os.Stat(filepath.Join(gamePath, gameExecutableName)); !os.IsNotExist(err) {
+		t.Fatalf("game executable was copied before the backup step: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(stagingPath, fixedExecutableName)); !os.IsNotExist(err) {
+		t.Fatalf("fixed executable still has its old staging name: %v", err)
+	}
+	if err := injection.rollback(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInstallExtractedFilesBacksUpThenCopiesFixedExecutable(t *testing.T) {
+	gamePath := t.TempDir()
+	stagingPath := t.TempDir()
+	originalContent := []byte("original executable")
+	fixedContent := []byte("fixed executable")
+	if err := os.WriteFile(filepath.Join(gamePath, gameExecutableName), originalContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stagingPath, fixedExecutableName), fixedContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stagingPath, "version.dll"), []byte("dll"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stages []installationStage
+	err := installExtractedFiles(stagingPath, gamePath, 2, func(progress installationProgress) {
+		stages = append(stages, progress.Stage)
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	backup, err := os.ReadFile(filepath.Join(gamePath, backupExecutableName))
@@ -302,25 +436,23 @@ func TestInjectFileBacksUpAndActivatesFixedExecutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(backup) != string(originalContent) {
-		t.Fatalf("backup content = %q, want %q", backup, originalContent)
+	if string(backup) != string(originalContent) || string(active) != string(fixedContent) {
+		t.Fatalf("backup = %q, active = %q", backup, active)
 	}
-	if string(active) != string(fixedContent) {
-		t.Fatalf("active content = %q, want %q", active, fixedContent)
-	}
-	if _, err := os.Stat(filepath.Join(gamePath, fixedExecutableName)); !os.IsNotExist(err) {
-		t.Fatalf("fixed executable still exists after rename: %v", err)
+	if len(stages) < 2 || stages[0] != stageInjecting || stages[1] != stageCopying {
+		t.Fatalf("stages = %v, want injection before copy", stages)
 	}
 }
 
-func TestInjectFileDoesNotChangeOriginalWhenFixedIsMissing(t *testing.T) {
+func TestPrepareExecutableInjectionDoesNotChangeOriginalWhenFixedIsMissing(t *testing.T) {
 	gamePath := t.TempDir()
+	stagingPath := t.TempDir()
 	originalContent := []byte("original executable")
 	if err := os.WriteFile(filepath.Join(gamePath, gameExecutableName), originalContent, 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := injectFile(gamePath); err == nil {
+	if _, err := prepareExecutableInjection(gamePath, stagingPath); err == nil {
 		t.Fatal("expected an error for missing fixed executable")
 	}
 	active, err := os.ReadFile(filepath.Join(gamePath, gameExecutableName))
@@ -335,23 +467,26 @@ func TestInjectFileDoesNotChangeOriginalWhenFixedIsMissing(t *testing.T) {
 	}
 }
 
-func TestInjectFileRefusesToOverwriteExistingBackup(t *testing.T) {
+func TestPrepareExecutableInjectionRefusesToOverwriteExistingBackup(t *testing.T) {
 	gamePath := t.TempDir()
-	files := map[string]string{
+	stagingPath := t.TempDir()
+	gameFiles := map[string]string{
 		gameExecutableName:   "current",
-		fixedExecutableName:  "fixed",
 		backupExecutableName: "existing backup",
 	}
-	for name, content := range files {
+	for name, content := range gameFiles {
 		if err := os.WriteFile(filepath.Join(gamePath, name), []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
+	if err := os.WriteFile(filepath.Join(stagingPath, fixedExecutableName), []byte("fixed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
-	if err := injectFile(gamePath); err == nil {
+	if _, err := prepareExecutableInjection(gamePath, stagingPath); err == nil {
 		t.Fatal("expected an error for existing backup")
 	}
-	for name, want := range files {
+	for name, want := range gameFiles {
 		content, err := os.ReadFile(filepath.Join(gamePath, name))
 		if err != nil {
 			t.Fatal(err)
