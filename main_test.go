@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -159,11 +161,13 @@ func TestDownloadAndExtractCopiesRARIntoDestination(t *testing.T) {
 
 	destination := t.TempDir()
 	var progressEvents []installationProgress
-	if err := downloadAndExtractWithProgress(
+	checksum := sha256.Sum256(archive)
+	if err := downloadAndExtractVerified(
 		context.Background(),
 		server.Client(),
 		server.URL,
 		destination,
+		fmt.Sprintf("%x", checksum[:]),
 		func(progress installationProgress) {
 			progressEvents = append(progressEvents, progress)
 		},
@@ -189,6 +193,38 @@ func TestDownloadAndExtractCopiesRARIntoDestination(t *testing.T) {
 	}
 	if !foundDownload || !foundExtraction || !foundCopy {
 		t.Fatalf("missing progress stages: %#v", progressEvents)
+	}
+}
+
+func TestDownloadAndExtractRejectsInvalidSHA256(t *testing.T) {
+	archive, err := os.ReadFile(filepath.Join("testdata", "basic.rar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.WriteHeader(http.StatusOK)
+		_, _ = response.Write(archive)
+	}))
+	defer server.Close()
+
+	destination := t.TempDir()
+	err = downloadAndExtractVerified(
+		context.Background(),
+		server.Client(),
+		server.URL,
+		destination,
+		strings.Repeat("0", sha256.Size*2),
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "checksum SHA-256 inválido") {
+		t.Fatalf("error = %v, want SHA-256 validation error", err)
+	}
+	entries, err := os.ReadDir(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("destination changed after checksum failure: %v", entries)
 	}
 }
 
