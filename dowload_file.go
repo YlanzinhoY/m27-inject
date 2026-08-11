@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"io/fs"
@@ -15,7 +16,10 @@ import (
 	"github.com/nwaples/rardecode/v2"
 )
 
-const downloadLink = "https://pixeldrain.com/api/file/AXCPM2gM"
+const (
+	downloadLink          = "https://pixeldrain.com/api/file/AXCPM2gM"
+	expectedArchiveSHA256 = "0d3c93b5ce9f410ed8220fdb91081c55eaf752316d32403f23042cf02bb8aa67"
+)
 
 type installationStage int
 
@@ -41,8 +45,13 @@ func downloadFiles(gamePath string) error {
 }
 
 func downloadFilesWithProgress(gamePath string, report progressReporter) error {
-	if err := downloadAndExtractWithProgress(
-		context.Background(), http.DefaultClient, downloadLink, gamePath, report,
+	if err := downloadAndExtractVerified(
+		context.Background(),
+		http.DefaultClient,
+		downloadLink,
+		gamePath,
+		expectedArchiveSHA256,
+		report,
 	); err != nil {
 		return err
 	}
@@ -63,6 +72,17 @@ func downloadAndExtractWithProgress(
 	client *http.Client,
 	sourceURL string,
 	gamePath string,
+	report progressReporter,
+) error {
+	return downloadAndExtractVerified(ctx, client, sourceURL, gamePath, "", report)
+}
+
+func downloadAndExtractVerified(
+	ctx context.Context,
+	client *http.Client,
+	sourceURL string,
+	gamePath string,
+	expectedSHA256 string,
 	report progressReporter,
 ) error {
 	info, err := os.Stat(gamePath)
@@ -103,8 +123,9 @@ func downloadAndExtractWithProgress(
 		Stage:      stageDownloading,
 		TotalBytes: response.ContentLength,
 	})
+	archiveHash := sha256.New()
 	download := &downloadProgressWriter{
-		writer:     archive,
+		writer:     io.MultiWriter(archive, archiveHash),
 		totalBytes: response.ContentLength,
 		report:     report,
 		lastReport: time.Now(),
@@ -125,8 +146,16 @@ func downloadAndExtractWithProgress(
 	if written == 0 {
 		return fmt.Errorf("o servidor retornou um arquivo vazio")
 	}
+	actualSHA256 := fmt.Sprintf("%x", archiveHash.Sum(nil))
+	if expectedSHA256 != "" && !strings.EqualFold(actualSHA256, expectedSHA256) {
+		return fmt.Errorf(
+			"checksum SHA-256 inválido: recebido %s, esperado %s",
+			actualSHA256,
+			expectedSHA256,
+		)
+	}
 
-	if err := extractRARWithProgress(archivePath, gamePath, report); err != nil {
+	if err := extractRARWithOptions(archivePath, gamePath, expectedSHA256 != "", report); err != nil {
 		return fmt.Errorf("falha ao extrair os arquivos: %w", err)
 	}
 	return nil
@@ -137,9 +166,22 @@ func extractRAR(archivePath string, gamePath string) error {
 }
 
 func extractRARWithProgress(archivePath string, gamePath string, report progressReporter) error {
+	return extractRARWithOptions(archivePath, gamePath, false, report)
+}
+
+func extractRARWithOptions(
+	archivePath string,
+	gamePath string,
+	skipInternalChecksum bool,
+	report progressReporter,
+) error {
 	reportProgress(report, installationProgress{Stage: stageExtracting})
 
-	reader, err := rardecode.OpenReader(archivePath)
+	options := make([]rardecode.Option, 0, 1)
+	if skipInternalChecksum {
+		options = append(options, rardecode.SkipCheck)
+	}
+	reader, err := rardecode.OpenReader(archivePath, options...)
 	if err != nil {
 		return err
 	}
